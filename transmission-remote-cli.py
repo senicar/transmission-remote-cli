@@ -183,7 +183,6 @@ class TransmissionRequest:
             if session_id:
                 self.http_request.add_header('X-Transmission-Session-Id', session_id)
             self.open_request = urllib2.urlopen(self.http_request)
-            debug(self.http_request.get_data() + "\n\n")
         except AttributeError:
             # request data (http_request) isn't specified yet -- data will be available on next call
             pass
@@ -221,7 +220,6 @@ class TransmissionRequest:
             authhandler.retried = 0
         try:
             data = json.loads(unicode(response))
-            debug(data)
         except ValueError:
             quit("Cannot parse response: %s\n" % response, JSON_ERROR)
         self.open_request = None
@@ -723,6 +721,28 @@ class Transmission:
 # End of Class Transmission
 
 
+class Statusitems:
+    def __init__(self, server):
+        self.server = server
+        self.funcs = dict()
+
+    def get(self, id, torrent):
+        """Maintain cache of method pointers to keep calls to eval() at a minimum."""
+        try:
+            return self.funcs[id](torrent)
+        except KeyError:
+            self.funcs[id] = eval('self.%s' % id)
+            return self.get(id, torrent)
+
+    def state(self, torrent):
+        return self.server.get_status(torrent)
+
+    def progress(self, torrent):
+        if torrent['status'] == Transmission.STATUS_CHECK:
+            return '%d' % float(torrent['recheckProgress'] * 100)
+        else:
+            return '%d' % float(torrent['percentDone'])
+
 
 
 
@@ -741,6 +761,7 @@ class Interface:
 
         self.torrents         = self.server.get_torrent_list(self.sort_orders)
         self.stats            = self.server.get_global_stats()
+        self.statusitem       = Statusitems(self.server)
         self.torrent_details  = []
         self.selected_torrent = -1  # changes to >-1 when focus >-1 & user hits return
         self.all_paused       = False
@@ -1593,45 +1614,19 @@ class Interface:
 
 
     def draw_torrentlist_status(self, torrent, focused, ypos):
-        peers = ''
-        parts = [self.server.get_status(torrent)]
+        parts = [self.statusitem.get('state', torrent)]
+        parts.append(self.statusitem.get('progress', torrent))
+        debug(parts)
 
-        # show tracker error if appropriate
-        if torrent['errorString'] and \
-                not torrent['seeders'] and not torrent['leechers'] and \
-                not torrent['status'] == Transmission.STATUS_STOPPED:
-            parts[0] = torrent['errorString'].encode('utf-8')
-
-        else:
-            if torrent['status'] == Transmission.STATUS_CHECK:
-                parts[0] += " (%d%%)" % int(float(torrent['recheckProgress']) * 100)
-            elif torrent['status'] == Transmission.STATUS_DOWNLOAD:
-                parts[0] += " (%d%%)" % torrent['percentDone']
-            parts[0] = parts[0].ljust(20)
-
-            # seeds and leeches will be appended right justified later
-            peers  = "%5s seed%s " % (num2str(torrent['seeders']), ('s', ' ')[torrent['seeders']==1])
-            peers += "%5s leech%s" % (num2str(torrent['leechers']), ('es', '  ')[torrent['leechers']==1])
-
-            # show additional information if enough room
-            if self.torrent_title_width - sum(map(lambda x: len(x), parts)) - len(peers) > 18:
-                uploaded = scale_bytes(torrent['uploadedEver'])
-                parts.append("%7s uploaded" % ('nothing',uploaded)[uploaded != '0B'])
-
-            if self.torrent_title_width - sum(map(lambda x: len(x), parts)) - len(peers) > 22:
-                parts.append("%4s peer%s connected" % (torrent['peersConnected'],
-                                                       ('s',' ')[torrent['peersConnected'] == 1]))
-
-        if focused: tags = curses.A_REVERSE + curses.A_BOLD
-        else:       tags = 0
-
-        remaining_space = self.torrent_title_width - sum(map(lambda x: len(x), parts), len(peers)) - 2
+        remaining_space = self.torrent_title_width - sum(map(lambda x: len(x), parts)) - 2
         delimiter = ' ' * int(remaining_space / (len(parts)))
 
-        line = self.server.get_bandwidth_priority(torrent) + ' ' + delimiter.join(parts)
+        line = delimiter.join(parts)
 
-        # make sure the peers element is always right justified
-        line += ' ' * int(self.torrent_title_width - len(line) - len(peers)) + peers
+        if focused:
+            tags = curses.A_REVERSE + curses.A_BOLD
+        else:
+            tags = 0
         self.pad.addstr(ypos+1, 0, line, tags)
 
 
