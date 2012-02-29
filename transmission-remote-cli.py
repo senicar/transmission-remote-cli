@@ -721,27 +721,51 @@ class Transmission:
 # End of Class Transmission
 
 
-class Statusitems:
+class Torrentstatus:
     def __init__(self, server):
         self.server = server
         self.funcs = dict()
+        for f in dir(self):
+            if f.startswith('get_'):
+                self.funcs[f.lstrip('get_')] = eval('self.%s' % f)
+        debug(self.funcs)
 
-    def get(self, id, torrent):
-        """Maintain cache of method pointers to keep calls to eval() at a minimum."""
-        try:
-            return self.funcs[id](torrent)
-        except KeyError:
-            self.funcs[id] = eval('self.%s' % id)
-            return self.get(id, torrent)
+    def parse(self, line, torrent):
+        for f in self.funcs.keys():
+            line = re.sub(r'(\\|)(%s)(?:\:(%%\d*\w)|)' % f,
+                          lambda m: self.parse_item(m, torrent),
+                          line)
+        return line
 
-    def state(self, torrent):
-        return self.server.get_status(torrent)
-
-    def progress(self, torrent):
-        if torrent['status'] == Transmission.STATUS_CHECK:
-            return '%d' % float(torrent['recheckProgress'] * 100)
+    def parse_item(self, m, t):
+        escaped, func, format = m.groups()
+        if escaped:   # We've been escaped! Abandon ship!
+            return m.group(0)[1:]
+        if format:
+            return self.funcs[func](t, format)
         else:
-            return '%d' % float(torrent['percentDone'])
+            return self.funcs[func](t)
+
+    def get_state(self, torrent, format='%-13s'):
+        return format % self.server.get_status(torrent)
+
+    def get_progress(self, torrent, format='%3d'):
+        if torrent['status'] == Transmission.STATUS_CHECK:
+            return format % float(torrent['recheckProgress'] * 100)
+        else:
+            return format % float(torrent['percentDone'])
+
+    def get_uploaded(self, torrent, format='%5s'):
+        return format % scale_bytes(torrent['uploadedEver'])
+
+            # # seeds and leeches will be appended right justified later
+            # peers  = "%5s seed%s " % (num2str(torrent['seeders']), ('s', ' ')[torrent['seeders']==1])
+            # peers += "%5s leech%s" % (num2str(torrent['leechers']), ('es', '  ')[torrent['leechers']==1])
+
+            # # show additional information if enough room
+            # if self.torrent_title_width - sum(map(lambda x: len(x), parts)) - len(peers) > 22:
+            #     parts.append("%4s peer%s connected" % (torrent['peersConnected'],
+            #                                            ('s',' ')[torrent['peersConnected'] == 1]))
 
 
 
@@ -760,8 +784,8 @@ class Interface:
         self.torrentname_is_progressbar = config.getboolean('Misc', 'torrentname_is_progressbar')
 
         self.torrents         = self.server.get_torrent_list(self.sort_orders)
+        self.torrentstats     = Torrentstatus(self.server)
         self.stats            = self.server.get_global_stats()
-        self.statusitem       = Statusitems(self.server)
         self.torrent_details  = []
         self.selected_torrent = -1  # changes to >-1 when focus >-1 & user hits return
         self.all_paused       = False
@@ -1529,7 +1553,9 @@ class Interface:
                 self.draw_eta(torrent, y)
 
             self.draw_ratio(torrent, y)
+            start=time.time()
             self.draw_torrentlist_status(torrent, focused, y)
+            debug('draw_torrentlist_status(): %f\n' % (time.time() - start))
 
             return 3 # number of lines that were used for drawing the list item
         else:
@@ -1614,13 +1640,12 @@ class Interface:
 
 
     def draw_torrentlist_status(self, torrent, focused, ypos):
-        parts = [self.statusitem.get('state', torrent)]
-        parts.append(self.statusitem.get('progress', torrent))
-        debug(parts)
+        format = 'state (progress%)|uploaded \uploaded'
+        parts = self.torrentstats.parse(format, torrent).split('|')
+#        debug(parts)
 
-        remaining_space = self.torrent_title_width - sum(map(lambda x: len(x), parts)) - 2
-        delimiter = ' ' * int(remaining_space / (len(parts)))
-
+        remaining_space = self.torrent_title_width - sum(map(lambda x: len(x), parts))
+        delimiter = ' ' * int(remaining_space / (len(parts)-1))
         line = delimiter.join(parts)
 
         if focused:
