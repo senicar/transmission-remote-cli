@@ -725,9 +725,10 @@ class Torrentstatus:
     def __init__(self, server):
         self.server = server
         self.funcs = dict()
-        for f in dir(self):
-            if f.startswith('get_'):
-                self.funcs[f.lstrip('get_')] = eval('self.%s' % f)
+        for func_name in dir(self):
+            if func_name.startswith('get_'):
+                self.funcs[func_name.lstrip('get_')] = getattr(self, func_name,
+                                                               lambda torrent: None)
         debug(self.funcs)
 
     def parse(self, line, torrent):
@@ -738,13 +739,13 @@ class Torrentstatus:
         return line
 
     def parse_item(self, m, t):
-        escaped, func, format = m.groups()
+        escaped, func_name, format = m.groups()
         if escaped:   # We've been escaped! Abandon ship!
             return m.group(0)[1:]
         if format:
-            return self.funcs[func](t, format)
+            return self.funcs[func_name](t, format)
         else:
-            return self.funcs[func](t)
+            return self.funcs[func_name](t)
 
     def get_state(self, torrent, format='%-13s'):
         return format % self.server.get_status(torrent)
