@@ -733,21 +733,36 @@ class Torrentstatus:
 
     def parse(self, line, torrent):
         for f in self.funcs.keys():
-            line = re.sub(r'(\\|)(%s)(?:\:(%%\d*\w)|)' % f,
+            line = re.sub(r'(\\|)(%s)(?:\:(%%\d*\w)|)([^\|]+?\[\w+\]|)' % f,
                           lambda m: self.parse_item(m, torrent),
                           line)
         return line
 
     def parse_item(self, m, t):
-        escaped, func_name, format = m.groups()
+        escaped, func_name, format, tail = m.groups()
         if escaped:   # We've been escaped! Abandon ship!
             return m.group(0)[1:]
-        if format:
-            return self.funcs[func_name](t, format)
-        else:
-            return self.funcs[func_name](t)
 
-    def get_state(self, torrent, format='%-13s'):
+        if format:
+            value = self.funcs[func_name](t, format)
+        else:
+            value = self.funcs[func_name](t)
+
+        # handle plural s
+        if tail:
+            try:
+                int_value = int(value)
+            except ValueError:
+                int_value = None
+            if not int_value or int_value != 1:
+                tail = re.sub(r'\[(\w+)\]', '\\1', tail)
+            else:
+                tail = re.sub(r'\[(\w+)\]', lambda m: ' ' * len(m.group(1)), tail)
+            return value + tail
+        return value
+
+
+    def get_state(self, torrent, format='%13s'):
         return format % self.server.get_status(torrent)
 
     def get_progress(self, torrent, format='%3d'):
@@ -756,19 +771,17 @@ class Torrentstatus:
         else:
             return format % float(torrent['percentDone'])
 
-    def get_uploaded(self, torrent, format='%5s'):
+    def get_uploaded(self, torrent, format='%6s'):
         return format % scale_bytes(torrent['uploadedEver'])
 
-            # # seeds and leeches will be appended right justified later
-            # peers  = "%5s seed%s " % (num2str(torrent['seeders']), ('s', ' ')[torrent['seeders']==1])
-            # peers += "%5s leech%s" % (num2str(torrent['leechers']), ('es', '  ')[torrent['leechers']==1])
+    def get_peers_connected(self, torrent, format='%s'):
+        return format % num2str(torrent['peersConnected'])
 
-            # # show additional information if enough room
-            # if self.torrent_title_width - sum(map(lambda x: len(x), parts)) - len(peers) > 22:
-            #     parts.append("%4s peer%s connected" % (torrent['peersConnected'],
-            #                                            ('s',' ')[torrent['peersConnected'] == 1]))
-
-
+    def get_seeds(self, torrent, format='%s'):
+        return format % num2str(torrent['seeders'])
+    def get_leeches(self, torrent, format='%s'):
+        return format % num2str(torrent['leechers'])
+    
 
 
 # User Interface
@@ -1641,11 +1654,16 @@ class Interface:
 
 
     def draw_torrentlist_status(self, torrent, focused, ypos):
-        format = 'state (progress%)|uploaded \uploaded'
+        format = 'state (progress%)|uploaded \uploaded|peers_connected:%3s peer[s] connected seeds:%3s seed[s] leeches:%3s leech[es]'
         parts = self.torrentstats.parse(format, torrent).split('|')
 #        debug(parts)
 
         remaining_space = self.torrent_title_width - sum(map(lambda x: len(x), parts))
+        # debug("parts:\n")
+        # debug(map(lambda x: len(x), parts))
+        # debug("total_space:%d\n" % self.torrent_title_width)
+        # debug("rem_space:%d\n" % remaining_space)
+        # debug("delim_width:%d\n" % delim_len)
         delimiter = ' ' * int(remaining_space / (len(parts)-1))
         line = delimiter.join(parts)
 
