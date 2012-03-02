@@ -115,6 +115,7 @@ config.set('Filtering', 'invert', 'False')
 config.add_section('Misc')
 config.set('Misc', 'compact_list', 'False')
 config.set('Misc', 'torrentname_is_progressbar', 'True')
+config.set('Misc', 'torrentstatus_format', 'state (progress%%)|uploaded \uploaded|peers_connected:%%3s peer[s] connected seeds:%%3s seed[s] leeches:%%3s leech[es]')
 config.add_section('Colors')
 config.set('Colors', 'title_seed',       'bg:green,fg:black')
 config.set('Colors', 'title_download',   'bg:blue,fg:black')
@@ -725,26 +726,40 @@ class Torrentstatus:
     def __init__(self, server):
         self.server = server
         self.funcs = dict()
+        self.cache = dict()
+        self.cache_update = 0
         for func_name in dir(self):
             if func_name.startswith('get_'):
                 self.funcs[func_name.lstrip('get_')] = getattr(self, func_name,
                                                                lambda torrent: None)
         debug(self.funcs)
 
-    def parse(self, line, torrent):
+    def parse(self, line_format, torrent):
+        if torrent['id'] not in self.cache:
+            self.cache[torrent['id']] = dict()
+        if not self.cache[torrent['id']]  or  time.time() - self.cache_update > 1:
+            self.cache_update = time.time()
+            return self._parse(line_format, torrent)
+        else:
+            return self.cache[torrent['id']][line_format]
+
+    def _parse(self, line_format, torrent):
+        line = line_format
         for f in self.funcs.keys():
             line = re.sub(r'(\\|)(%s)(?:\:(%%\d*\w)|)([^\|]+?\[\w+\]|)' % f,
                           lambda m: self.parse_item(m, torrent),
                           line)
+        self.cache[torrent['id']][line_format] = line
         return line
 
+
     def parse_item(self, m, t):
-        escaped, func_name, format, tail = m.groups()
+        escaped, func_name, item_format, tail = m.groups()
         if escaped:   # We've been escaped! Abandon ship!
             return m.group(0)[1:]
 
-        if format:
-            value = self.funcs[func_name](t, format)
+        if item_format:
+            value = self.funcs[func_name](t, item_format)
         else:
             value = self.funcs[func_name](t)
 
@@ -796,6 +811,7 @@ class Interface:
         self.sort_orders    = parse_sort_str(config.get('Sorting', 'order'))
         self.compact_list   = config.getboolean('Misc', 'compact_list')
         self.torrentname_is_progressbar = config.getboolean('Misc', 'torrentname_is_progressbar')
+        self.torrentstatus_format       = config.get('Misc', 'torrentstatus_format')
 
         self.torrents         = self.server.get_torrent_list(self.sort_orders)
         self.torrentstats     = Torrentstatus(self.server)
@@ -1654,8 +1670,7 @@ class Interface:
 
 
     def draw_torrentlist_status(self, torrent, focused, ypos):
-        format = 'state (progress%)|uploaded \uploaded|peers_connected:%3s peer[s] connected seeds:%3s seed[s] leeches:%3s leech[es]'
-        parts = self.torrentstats.parse(format, torrent).split('|')
+        parts = self.torrentstats.parse(self.torrentstatus_format, torrent).split('|')
 #        debug(parts)
 
         remaining_space = self.torrent_title_width - sum(map(lambda x: len(x), parts))
