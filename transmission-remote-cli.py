@@ -727,7 +727,6 @@ class Torrentstatus:
         self.server = server
         self.funcs = dict()
         self.cache = dict()
-        self.cache_update = 0
         for func_name in dir(self):
             if func_name.startswith('get_'):
                 self.funcs[func_name.lstrip('get_')] = getattr(self, func_name,
@@ -737,8 +736,8 @@ class Torrentstatus:
     def parse(self, line_format, torrent):
         if torrent['id'] not in self.cache:
             self.cache[torrent['id']] = dict()
-        if not self.cache[torrent['id']]  or  time.time() - self.cache_update > 1:
-            self.cache_update = time.time()
+        if not self.cache[torrent['id']]  or  time.time() - self.cache[torrent['id']]['update_time'] > 1:
+            self.cache[torrent['id']]['update_time'] = time.time()
             return self._parse(line_format, torrent)
         else:
             return self.cache[torrent['id']][line_format]
