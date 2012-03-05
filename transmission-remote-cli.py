@@ -115,7 +115,7 @@ config.set('Filtering', 'invert', 'False')
 config.add_section('Misc')
 config.set('Misc', 'compact_list', 'False')
 config.set('Misc', 'torrentname_is_progressbar', 'True')
-config.set('Misc', 'torrentstatus_format', 'state (progress%%)|uploaded \uploaded|peers_connected:%%3s peer[s] connected seeds:%%3s seed[s] leeches:%%3s leech[es]')
+config.set('Misc', 'torrentstatus_format', 'state (progress%%)|uploaded \uploaded|peers_connected:%%3s peer[s] connected|seeds:%%3s seed[s]|leeches:%%3s leech[es]')
 config.add_section('Colors')
 config.set('Colors', 'title_seed',       'bg:green,fg:black')
 config.set('Colors', 'title_download',   'bg:blue,fg:black')
@@ -721,35 +721,47 @@ class Transmission:
 
 # End of Class Transmission
 
-
 class Torrentstatus:
-    def __init__(self, server):
-        self.server = server
+    def __init__(self, server, max_age=3):
+        self.server      = server 
+        self.max_age     = max_age
+        self.cache       = dict()
+        self.last_update = 0
         self.funcs = dict()
-        self.cache = dict()
         for func_name in dir(self):
             if func_name.startswith('get_'):
                 self.funcs[func_name.lstrip('get_')] = getattr(self, func_name,
                                                                lambda torrent: None)
-        debug(self.funcs)
 
-    def parse(self, line_format, torrent):
-        if torrent['id'] not in self.cache:
-            self.cache[torrent['id']] = dict()
-        if not self.cache[torrent['id']]  or  time.time() - self.cache[torrent['id']]['update_time'] > 1:
-            self.cache[torrent['id']]['update_time'] = time.time()
-            return self._parse(line_format, torrent)
-        else:
-            return self.cache[torrent['id']][line_format]
+    def get_line(self, torrent, line_format, width):
+        if time.time() - self.last_update > self.max_age \
+                or torrent['id'] not in self.cache:
+            self.cache[torrent['id']] = self.parse(line_format, torrent, width)
+        return self.cache[torrent['id']]
 
-    def _parse(self, line_format, torrent):
+    def parse(self, line_format, torrent, width):
+        # translate keywords to their values
         line = line_format
         for f in self.funcs.keys():
             line = re.sub(r'(\\|)(%s)(?:\:(%%\d*\w)|)([^\|]+?\[\w+\]|)' % f,
                           lambda m: self.parse_item(m, torrent),
                           line)
-        self.cache[torrent['id']][line_format] = line
-        return line
+
+        # split line into parts
+        parts = line.split('|')
+
+        # space parts evenly
+        while True:
+            space_left = width - sum(map(lambda x: len(x), parts))
+            # # make sure line isn't longer than width
+            # if space_left < 0:
+            #     parts.pop()
+            # else:
+            break
+        delimiter  = ' ' * int(space_left / (len(parts)-1))
+
+        # rejoin spaced parts
+        return delimiter.join(parts)
 
 
     def parse_item(self, m, t):
@@ -1669,17 +1681,10 @@ class Interface:
 
 
     def draw_torrentlist_status(self, torrent, focused, ypos):
-        parts = self.torrentstats.parse(self.torrentstatus_format, torrent).split('|')
+        line = self.torrentstats.get_line(torrent,
+                                          self.torrentstatus_format,
+                                          self.torrent_title_width)
 #        debug(parts)
-
-        remaining_space = self.torrent_title_width - sum(map(lambda x: len(x), parts))
-        # debug("parts:\n")
-        # debug(map(lambda x: len(x), parts))
-        # debug("total_space:%d\n" % self.torrent_title_width)
-        # debug("rem_space:%d\n" % remaining_space)
-        # debug("delim_width:%d\n" % delim_len)
-        delimiter = ' ' * int(remaining_space / (len(parts)-1))
-        line = delimiter.join(parts)
 
         if focused:
             tags = curses.A_REVERSE + curses.A_BOLD
